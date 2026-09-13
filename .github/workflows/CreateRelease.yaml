@@ -167,12 +167,13 @@ jobs:
           }
           $allArtifacts = @()
           $page = 1
+          $maxPages = 10
           do {
             $repoArtifacts = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/artifacts?per_page=100&page=$page"
             $allArtifacts += $repoArtifacts.artifacts | Where-Object { -not $_.expired }
             $page++
           }
-          while ($repoArtifacts.artifacts.Count -gt 0)
+          while ($repoArtifacts.artifacts.Count -gt 0 -and $page -le $maxPages)
 
           $candidates = @()
           foreach($artifact in $allArtifacts) {
