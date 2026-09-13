@@ -171,12 +171,11 @@ jobs:
           $selectedVersion = $null
           $selectedSha = $null
           $workflowFile = 'CICD.yaml'
-          $encodedRef = [uri]::EscapeDataString("${{ github.ref_name }}")
           $runPage = 1
-          $refSuffix = "-$refName"
+          $artifactPattern = "^(?<project>.+)-$([regex]::Escape($refName))-(?<type>Apps|PowerPlatformSolution)-(?<version>\d+\.\d+\.\d+\.\d+)$"
 
           do {
-            $runsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/$workflowFile/runs?branch=$encodedRef&status=success&per_page=100&page=$runPage"
+            $runsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/$workflowFile/runs?status=success&per_page=100&page=$runPage"
             foreach($workflowRun in $runsResponse.workflow_runs) {
               $matchingRunArtifacts = @()
               $artifactPage = 1
@@ -184,23 +183,11 @@ jobs:
                 $runArtifactsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/$($workflowRun.id)/artifacts?per_page=100&page=$artifactPage"
                 foreach($artifact in ($runArtifactsResponse.artifacts | Where-Object { -not $_.expired })) {
                   $name = $artifact.name
-                  $parts = $name -split '-'
-                  if ($parts.Count -lt 4) {
+                  if ($name -notmatch $artifactPattern) {
                     continue
                   }
-                  $version = $parts[-1]
-                  if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
-                    continue
-                  }
-                  $type = $parts[-2]
-                  if ($type -ne 'Apps' -and $type -ne 'PowerPlatformSolution') {
-                    continue
-                  }
-                  $project = ($parts[0..($parts.Count-3)] -join '-')
-                  if (-not $project.EndsWith($refSuffix)) {
-                    continue
-                  }
-                  $project = $project.Substring(0, $project.Length - $refSuffix.Length)
+                  $project = $Matches.project
+                  $version = $Matches.version
                   if (-not $projectSet.ContainsKey($project)) {
                     continue
                   }
