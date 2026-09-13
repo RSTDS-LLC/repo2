@@ -211,7 +211,7 @@ jobs:
                 }
                 $artifactPage++
               }
-              while ($runArtifactsResponse.artifacts.Count -gt 0)
+              while ($runArtifactsResponse.artifacts.Count -eq 100)
 
               $projectsInRun = @($matchingRunArtifacts.project | Select-Object -Unique)
               if ($projectsInRun.Count -ne $requiredProjectCount) {
@@ -230,7 +230,7 @@ jobs:
             }
             $runPage++
           }
-          while ($runsResponse.workflow_runs.Count -gt 0)
+          while ($runsResponse.workflow_runs.Count -eq 20)
 
           if (-not $selectedVersion) {
             $projectList = ($projects -join ', ')
