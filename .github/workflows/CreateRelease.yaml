@@ -235,7 +235,8 @@ jobs:
           }
 
           if (-not $selectedVersion) {
-            throw "Unable to determine a latest common build version containing all projects for ${{ github.ref_name }}."
+            $projectList = ($projects -join ', ')
+            throw "Unable to determine a latest common build version containing all projects ($projectList) for ref $refName."
           }
 
           Write-Host "Resolved latest build version: $selectedVersion (sha: $selectedSha)"
