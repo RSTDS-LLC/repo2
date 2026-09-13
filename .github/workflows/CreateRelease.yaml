@@ -165,74 +165,87 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
             "Accept" = "application/vnd.github+json; charset=utf-8"
           }
-          $allArtifacts = @()
-          $page = 1
-          $maxPages = 10
-          do {
-            $repoArtifacts = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/artifacts?per_page=100&page=$page"
-            $allArtifacts += $repoArtifacts.artifacts | Where-Object { -not $_.expired }
-            $page++
-          }
-          while ($repoArtifacts.artifacts.Count -gt 0 -and $page -le $maxPages)
-
           $candidates = @()
-          foreach($artifact in $allArtifacts) {
-            $name = $artifact.name
-            $parts = $name -split '-'
-            if ($parts.Count -lt 4) {
-              continue
-            }
-            $version = $parts[-1]
-            if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
-              continue
-            }
-            $type = $parts[-2]
-            if ($type -ne 'Apps' -and $type -ne 'PowerPlatformSolution') {
-              continue
-            }
-            $project = ($parts[0..($parts.Count-3)] -join '-')
-            $refSuffix = "-$refName"
-            if (-not $project.EndsWith($refSuffix)) {
-              continue
-            }
-            $project = $project.Substring(0, $project.Length - $refSuffix.Length)
-            if (-not $projectSet.ContainsKey($project)) {
-              continue
-            }
-            $candidates += [PSCustomObject]@{
-              sha = $artifact.workflow_run.head_sha
-              project = $project
-              version = $version
-              created = [datetime]$artifact.created_at
-            }
-          }
-
           $selectedVersion = $null
           $selectedSha = $null
-          $shaGroups = $candidates |
-            Group-Object sha |
-            ForEach-Object {
-              [PSCustomObject]@{
-                Name = $_.Name
-                Group = $_.Group
-                LatestCreated = ($_.Group | Measure-Object -Property created -Maximum).Maximum
-              }
-            } |
-            Sort-Object LatestCreated -Descending
+          $selectLatestCommonBuild = {
+            param(
+              [array] $candidateItems,
+              [int] $requiredCount
+            )
+            if (-not $candidateItems -or $candidateItems.Count -eq 0) {
+              return $null
+            }
+            $shaGroups = $candidateItems |
+              Group-Object sha |
+              ForEach-Object {
+                [PSCustomObject]@{
+                  Name = $_.Name
+                  Group = $_.Group
+                  LatestCreated = ($_.Group | Measure-Object -Property created -Maximum).Maximum
+                }
+              } |
+              Sort-Object LatestCreated -Descending
 
-          foreach($shaGroup in $shaGroups) {
-            $projectsForSha = @($shaGroup.Group.project | Select-Object -Unique)
-            if ($projectsForSha.Count -ne $requiredProjectCount) {
-              continue
+            foreach($shaGroup in $shaGroups) {
+              $projectsForSha = @($shaGroup.Group.project | Select-Object -Unique)
+              if ($projectsForSha.Count -ne $requiredCount) {
+                continue
+              }
+              $versionsForSha = @($shaGroup.Group.version | Select-Object -Unique)
+              if ($versionsForSha.Count -ne 1) {
+                continue
+              }
+              return [PSCustomObject]@{
+                Sha = $shaGroup.Name
+                Version = $versionsForSha[0]
+              }
             }
-            $versionsForSha = @($shaGroup.Group.version | Select-Object -Unique)
-            if ($versionsForSha.Count -ne 1) {
-              continue
-            }
-            $selectedSha = $shaGroup.Name
-            $selectedVersion = $versionsForSha[0]
-            break
+            return $null
           }
+
+          $page = 1
+          do {
+            $repoArtifacts = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/artifacts?per_page=100&page=$page"
+            foreach($artifact in ($repoArtifacts.artifacts | Where-Object { -not $_.expired })) {
+              $name = $artifact.name
+              $parts = $name -split '-'
+              if ($parts.Count -lt 4) {
+                continue
+              }
+              $version = $parts[-1]
+              if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+                continue
+              }
+              $type = $parts[-2]
+              if ($type -ne 'Apps' -and $type -ne 'PowerPlatformSolution') {
+                continue
+              }
+              $project = ($parts[0..($parts.Count-3)] -join '-')
+              $refSuffix = "-$refName"
+              if (-not $project.EndsWith($refSuffix)) {
+                continue
+              }
+              $project = $project.Substring(0, $project.Length - $refSuffix.Length)
+              if (-not $projectSet.ContainsKey($project)) {
+                continue
+              }
+              $candidates += [PSCustomObject]@{
+                sha = $artifact.workflow_run.head_sha
+                project = $project
+                version = $version
+                created = [datetime]$artifact.created_at
+              }
+            }
+            $selection = & $selectLatestCommonBuild $candidates $requiredProjectCount
+            if ($selection) {
+              $selectedSha = $selection.Sha
+              $selectedVersion = $selection.Version
+              break
+            }
+            $page++
+          }
+          while ($repoArtifacts.artifacts.Count -gt 0)
 
           if (-not $selectedVersion) {
             $projectList = ($projects -join ', ')
