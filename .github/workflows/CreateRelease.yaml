@@ -208,7 +208,18 @@ jobs:
 
           $selectedVersion = $null
           $selectedSha = $null
-          foreach($shaGroup in ($candidates | Sort-Object created -Descending | Group-Object sha)) {
+          $shaGroups = $candidates |
+            Group-Object sha |
+            ForEach-Object {
+              [PSCustomObject]@{
+                Name = $_.Name
+                Group = $_.Group
+                LatestCreated = ($_.Group | Measure-Object -Property created -Maximum).Maximum
+              }
+            } |
+            Sort-Object LatestCreated -Descending
+
+          foreach($shaGroup in $shaGroups) {
             $projectsForSha = @($shaGroup.Group.project | Select-Object -Unique)
             if ($projectsForSha.Count -ne $requiredProjectCount) {
               continue
