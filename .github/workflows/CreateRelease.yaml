@@ -176,7 +176,7 @@ jobs:
           $refSuffix = "-$refName"
 
           do {
-            $runsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/$workflowFile/runs?branch=$encodedRef&status=success&per_page=20&page=$runPage"
+            $runsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/$workflowFile/runs?branch=$encodedRef&status=success&per_page=100&page=$runPage"
             foreach($workflowRun in $runsResponse.workflow_runs) {
               $matchingRunArtifacts = @()
               $artifactPage = 1
@@ -230,7 +230,7 @@ jobs:
             }
             $runPage++
           }
-          while ($runsResponse.workflow_runs.Count -eq 20)
+          while ($runsResponse.workflow_runs.Count -eq 100)
 
           if (-not $selectedVersion) {
             $projectList = ($projects -join ', ')
