@@ -129,12 +129,110 @@ jobs:
           token: ${{ fromJson(steps.ReadSecrets.outputs.Secrets).ghTokenWorkflow }}
           downloadLatest: true
 
+      - name: Resolve build version
+        id: resolveBuildVersion
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_VERSION_INPUT: ${{ github.event.inputs.buildVersion }}
+          PROJECTS_JSON: ${{ steps.determineProjects.outputs.ProjectsJson }}
+        run: |
+          $errorActionPreference = "Stop"; $ProgressPreference = "SilentlyContinue"; Set-StrictMode -Version 2.0
+          $buildVersion = "$env:BUILD_VERSION_INPUT"
+          if ([string]::IsNullOrWhiteSpace($buildVersion)) {
+            $buildVersion = 'latest'
+          }
+          if ($buildVersion -ne 'latest') {
+            Add-Content -Encoding UTF8 -Path $env:GITHUB_OUTPUT -Value "buildVersion=$buildVersion"
+            exit 0
+          }
+
+          $projects = @()
+          foreach($project in (ConvertFrom-Json $env:PROJECTS_JSON)) {
+            if ($project -and ($project -ne '.')) {
+              $projects += $project.Replace('\','_').Replace('/','_')
+            }
+            else {
+              $projects += "${{ env.repoName }}"
+            }
+          }
+          $projects = $projects | Select-Object -Unique
+          $projectSet = @{}
+          foreach($project in $projects) {
+            $projectSet[$project] = $true
+          }
+          $requiredProjectCount = $projectSet.Keys.Count
+          $refName = "${{ github.ref_name }}".Replace('/','_')
+
+          $headers = @{
+            "Authorization" = "token $env:GITHUB_TOKEN"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "Accept" = "application/vnd.github+json; charset=utf-8"
+          }
+          $selectedVersion = $null
+          $selectedSha = $null
+          $workflowFile = 'CICD.yaml'
+          $runPage = 1
+          $artifactPattern = "^(?<project>.+)-$([regex]::Escape($refName))-(?<type>Apps|PowerPlatformSolution)-(?<version>\d+\.\d+\.\d+\.\d+)$"
+
+          do {
+            $runsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/$workflowFile/runs?status=success&per_page=100&page=$runPage"
+            foreach($workflowRun in $runsResponse.workflow_runs) {
+              $matchingRunArtifacts = @()
+              $artifactPage = 1
+              do {
+                $runArtifactsResponse = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/$($workflowRun.id)/artifacts?per_page=100&page=$artifactPage"
+                foreach($artifact in ($runArtifactsResponse.artifacts | Where-Object { -not $_.expired })) {
+                  $name = $artifact.name
+                  if ($name -notmatch $artifactPattern) {
+                    continue
+                  }
+                  $project = $Matches.project
+                  $version = $Matches.version
+                  if (-not $projectSet.ContainsKey($project)) {
+                    continue
+                  }
+                  $matchingRunArtifacts += [PSCustomObject]@{
+                    project = $project
+                    version = $version
+                  }
+                }
+                $artifactPage++
+              }
+              while ($runArtifactsResponse.artifacts.Count -eq 100)
+
+              $projectsInRun = @($matchingRunArtifacts.project | Select-Object -Unique)
+              if ($projectsInRun.Count -ne $requiredProjectCount) {
+                continue
+              }
+              $versionsInRun = @($matchingRunArtifacts.version | Select-Object -Unique)
+              if ($versionsInRun.Count -ne 1) {
+                continue
+              }
+              $selectedVersion = $versionsInRun[0]
+              $selectedSha = $workflowRun.head_sha
+              break
+            }
+            if ($selectedVersion) {
+              break
+            }
+            $runPage++
+          }
+          while ($runsResponse.workflow_runs.Count -eq 100)
+
+          if (-not $selectedVersion) {
+            $projectList = ($projects -join ', ')
+            throw "Unable to determine a latest common build version containing all projects ($projectList) for ref $refName."
+          }
+
+          Write-Host "Resolved latest build version: $selectedVersion (sha: $selectedSha)"
+          Add-Content -Encoding UTF8 -Path $env:GITHUB_OUTPUT -Value "buildVersion=$selectedVersion"
+
       - name: Determine artifacts for release
         uses: microsoft/AL-Go-Actions/DetermineArtifactsForRelease@v9.2
         id: determineArtifactsForRelease
         with:
           shell: powershell
-          buildVersion: ${{ github.event.inputs.buildVersion }}
+          buildVersion: ${{ steps.resolveBuildVersion.outputs.buildVersion }}
           GITHUB_TOKEN: ${{ github.token }}
           TOKENFORPUSH: ${{ steps.ReadSecrets.outputs.TokenForPush }}
           ProjectsJson: ${{ steps.determineProjects.outputs.ProjectsJson }}
@@ -144,7 +242,7 @@ jobs:
         uses: microsoft/AL-Go-Actions/CreateReleaseNotes@v9.2
         with:
           shell: powershell
-          buildVersion: ${{ github.event.inputs.buildVersion }}
+          buildVersion: ${{ steps.resolveBuildVersion.outputs.buildVersion }}
           tag_name: ${{ github.event.inputs.tag }}
           target_commitish: ${{ steps.determineArtifactsForRelease.outputs.commitish }}
 
@@ -249,7 +347,7 @@ jobs:
           type: 'Release'
           projects: ${{ matrix.project }}
           deliveryTarget: 'NuGet'
-          artifacts: ${{ github.event.inputs.buildVersion }}
+          artifacts: ${{ steps.resolveBuildVersion.outputs.buildVersion }}
           atypes: 'Apps,TestApps'
 
       - name: Deliver to Storage
@@ -262,7 +360,7 @@ jobs:
           type: 'Release'
           projects: ${{ matrix.project }}
           deliveryTarget: 'Storage'
-          artifacts: ${{ github.event.inputs.buildVersion }}
+          artifacts: ${{ steps.resolveBuildVersion.outputs.buildVersion }}
           atypes: 'Apps,TestApps,Dependencies'
 
   CreateReleaseBranch:
